@@ -1,295 +1,241 @@
+<!--
+BIGKAIQUE — Exemplo de sala coletiva de webcam (HTML + sinalização WebSocket)
+
+ATENÇÃO: este exemplo demonstra como *pedir permissão* a cada visitante e transmitir a webcam
+para outros visitantes da mesma sala (estilo "big brother"). **Somente os usuários que derem
+permissão terão a câmera transmitida.**
+
+Você precisa de:
+1) Este arquivo `index.html` (cliente) hospedado em HTTPS.
+2) Um servidor de sinalização (WebSocket) rodando em um servidor público — exemplo em Node.js
+   está incluído abaixo como `server.js` (cole no servidor e rode com Node 18+).
+3) Hospedar ambos (front-end em GitHub Pages, Netlify, etc., e o server.js em um VPS/Render/Heroku).
+
+Privacidade: informe claramente aos usuários que a câmera será transmitida e peça consentimento.
+--> 
+
 <!doctype html>
 <html lang="pt-BR">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>BIGKAIQUE — Webcam no Navegador</title>
-  <meta name="description" content="Site BIGKAIQUE para acessar e visualizar a webcam diretamente no navegador." />
+  <title>BIGKAIQUE — Sala coletiva de Webcam</title>
   <style>
-    :root{
-      --bg:#0b0f14;--card:#121826;--muted:#9aa4b2;--accent:#2dd4bf;--text:#e5e7eb;--danger:#ef4444;
-    }
-    *{box-sizing:border-box}
-    body{margin:0; font-family: system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell,Noto Sans,Helvetica,Arial,sans-serif; background:linear-gradient(180deg,#0b0f14,#0e1523 60%,#0b0f14); color:var(--text);}
-    .wrap{max-width:1100px;margin:0 auto;padding:24px}
-    header{display:flex;align-items:center;gap:12px;justify-content:space-between;margin-bottom:16px}
-    .brand{display:flex;align-items:center;gap:10px}
-    .logo{width:42px;height:42px;border-radius:12px;background:radial-gradient(circle at 30% 30%, #34d399, #06b6d4 60%, #2563eb); box-shadow:0 10px 30px rgba(37,99,235,.35)}
-    h1{font-size:clamp(22px,3.6vw,32px);margin:0;letter-spacing:.5px}
-    .card{background:rgba(18,24,38,.8); border:1px solid rgba(255,255,255,.05); border-radius:18px; padding:16px; backdrop-filter: blur(8px); box-shadow: 0 6px 24px rgba(0,0,0,.35)}
-    .controls{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin:14px 0}
-    label{font-size:12px; color:var(--muted); display:block; margin-bottom:6px}
-    select, input[type="number"], button{width:100%; padding:10px 12px; border-radius:12px; border:1px solid rgba(255,255,255,.08); background:#0f172a; color:#e5e7eb}
-    select:focus, input:focus, button:focus{outline:2px solid var(--accent);outline-offset:2px}
-    .row{display:flex;gap:12px; flex-wrap:wrap}
-    .row > *{flex:1 1 180px}
-    .btn{cursor:pointer; font-weight:600}
-    .btn.primary{background:linear-gradient(90deg,#06b6d4,#22d3ee); color:#062329; border:none}
-    .btn.stop{background:linear-gradient(90deg,#f43f5e,#ef4444); color:white; border:none}
-    .btn.ghost{background:transparent; border:1px dashed rgba(255,255,255,.18)}
-    .video-wrap{position:relative; border-radius:16px; overflow:hidden; background:#020617; aspect-ratio:16/9; display:grid; place-items:center}
-    video{max-width:100%; width:100%; height:100%; object-fit:cover; transform: scaleX(1);}
-    .mirrored video{transform: scaleX(-1)}
-    .badge{position:absolute; top:10px; left:10px; background:rgba(0,0,0,.55); padding:6px 10px; border-radius:999px; font-size:12px; border:1px solid rgba(255,255,255,.08)}
-    .status{font-size:13px; color:var(--muted); margin-top:10px}
-    footer{opacity:.8; font-size:12px; margin-top:16px; text-align:center}
-    .hidden{display:none}
-    .pill{display:inline-flex;align-items:center;gap:8px;padding:8px 12px;border-radius:999px;background:#0b1220;border:1px solid rgba(255,255,255,.08)}
-    .danger{color:#fecaca}
+    body{font-family:system-ui,Segoe UI,Roboto; background:#0b1220;color:#e6eef3;margin:0;padding:18px}
+    header{display:flex;justify-content:space-between;align-items:center}
+    .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;margin-top:12px}
+    video{width:100%;height:160px;object-fit:cover;border-radius:8px;background:#000}
+    .controls{display:flex;gap:8px;margin-top:8px}
+    button{padding:8px 12px;border-radius:8px;border:none;cursor:pointer}
+    .notice{background:#07202a;padding:10px;border-radius:8px;margin-top:10px}
   </style>
 </head>
 <body>
-  <div class="wrap">
-    <header>
-      <div class="brand">
-        <div class="logo" aria-hidden="true"></div>
-        <h1>BIGKAIQUE — Acesso à Webcam</h1>
-      </div>
-      <div class="pill" title="Funciona melhor em HTTPS (ex.: GitHub Pages)">🔒 Precisa de permissão do navegador</div>
-    </header>
+  <header>
+    <h1>BIGKAIQUE — Sala</h1>
+    <div>
+      <label>Nome da sala: <input id="roomInput" value="sala1" /></label>
+      <button id="joinBtn">Entrar / Atualizar</button>
+    </div>
+  </header>
 
-    <section class="card">
-      <div class="controls">
-        <div>
-          <label for="cameraSelect">Câmera</label>
-          <select id="cameraSelect"></select>
-        </div>
-        <div>
-          <label for="resolution">Resolução</label>
-          <select id="resolution">
-            <option value="default">Automática</option>
-            <option value="1280x720">1280×720 (HD)</option>
-            <option value="1920x1080">1920×1080 (FullHD)</option>
-            <option value="640x480">640×480 (VGA)</option>
-          </select>
-        </div>
-        <div>
-          <label for="fps">FPS desejado</label>
-          <input id="fps" type="number" min="1" max="60" step="1" value="30" />
-        </div>
-        <div>
-          <label>&nbsp;</label>
-          <button id="startBtn" class="btn primary">▶️ Iniciar câmera</button>
-        </div>
-        <div>
-          <label>&nbsp;</label>
-          <button id="stopBtn" class="btn stop" disabled>⏹️ Parar</button>
-        </div>
-        <div>
-          <label>&nbsp;</label>
-          <button id="snapshotBtn" class="btn ghost" disabled>📸 Capturar foto</button>
-        </div>
-        <div>
-          <label>&nbsp;</label>
-          <button id="fullscreenBtn" class="btn ghost" disabled>⛶ Tela cheia</button>
-        </div>
-        <div>
-          <label for="mirrorToggle">Espelhar imagem</label>
-          <select id="mirrorToggle">
-            <option value="on" selected>Ligado</option>
-            <option value="off">Desligado</option>
-          </select>
-        </div>
-      </div>
+  <div class="notice">Este exemplo pede permissão para enviar sua webcam. Apenas os participantes que
+  permitirem terão seu vídeo compartilhado com os demais. Use em HTTPS.</div>
 
-      <div id="videoContainer" class="video-wrap mirrored">
-        <span class="badge" id="badge">Câmera parada</span>
-        <video id="video" playsinline autoplay muted></video>
-      </div>
-      <div class="status" id="status">Pronto. Clique em “Iniciar câmera” e permita o acesso quando solicitado.</div>
-    </section>
-
-    <section class="card" style="margin-top:16px">
-      <h2 style="margin:0 0 8px 0; font-size:18px">Foto capturada</h2>
-      <div class="row">
-        <canvas id="canvas" class="hidden" aria-label="Prévia da foto"></canvas>
-        <a id="downloadLink" class="btn ghost" download="bigkaique-foto.png">⬇️ Baixar foto</a>
-        <button id="clearPhoto" class="btn ghost">🗑️ Limpar</button>
-      </div>
-    </section>
-
-    <footer>
-      Feito com ❤️ para <strong>BIGKAIQUE</strong>. Funciona em Chrome, Edge, Firefox e Safari recentes. Necessita HTTPS (ou localhost).
-    </footer>
+  <div class="controls">
+    <button id="startLocal">🔴 Ativar minha câmera</button>
+    <button id="stopLocal" disabled>⏹️ Desativar minha câmera</button>
   </div>
 
+  <div class="grid" id="videos"></div>
+
   <script>
-    const video = document.getElementById('video');
-    const canvas = document.getElementById('canvas');
-    const cameraSelect = document.getElementById('cameraSelect');
-    const resolution = document.getElementById('resolution');
-    const fpsInput = document.getElementById('fps');
-    const startBtn = document.getElementById('startBtn');
-    const stopBtn = document.getElementById('stopBtn');
-    const snapshotBtn = document.getElementById('snapshotBtn');
-    const fullscreenBtn = document.getElementById('fullscreenBtn');
-    const statusEl = document.getElementById('status');
-    const downloadLink = document.getElementById('downloadLink');
-    const clearPhotoBtn = document.getElementById('clearPhoto');
-    const badge = document.getElementById('badge');
-    const videoContainer = document.getElementById('videoContainer');
-    const mirrorToggle = document.getElementById('mirrorToggle');
+  // CONFIG: alterar para o seu servidor de sinalização (ws:// ou wss://)
+  const SIGNALING_SERVER = 'wss://SEU_SERVIDOR_DE_SINALIZACAO:3000';
 
-    let stream = null;
+  // Mapa de peers
+  const peers = new Map(); // peerId -> { pc, el }
+  let localStream = null;
+  let ws = null;
+  let clientId = null;
 
-    function setStatus(text, isError=false){
-      statusEl.textContent = text;
-      statusEl.style.color = isError ? 'var(--danger)' : 'var(--muted)';
+  const videos = document.getElementById('videos');
+  const startLocalBtn = document.getElementById('startLocal');
+  const stopLocalBtn = document.getElementById('stopLocal');
+  const joinBtn = document.getElementById('joinBtn');
+  const roomInput = document.getElementById('roomInput');
+
+  function log(...args){ console.log('[bigkaique]',...args); }
+
+  function addVideo(id, stream, label){
+    let container = document.getElementById('vid-'+id);
+    if(!container){
+      container = document.createElement('div');
+      container.id = 'vid-'+id;
+      const v = document.createElement('video');
+      v.autoplay = true; v.playsInline = true; v.muted = false;
+      container.appendChild(v);
+      const cap = document.createElement('div'); cap.textContent = label || id; cap.style.fontSize='12px'; cap.style.marginTop='6px'; cap.style.color='#cfe';
+      container.appendChild(cap);
+      videos.appendChild(container);
     }
+    const videoEl = container.querySelector('video');
+    videoEl.srcObject = stream;
+  }
 
-    function buildConstraints(){
-      const fps = Number(fpsInput.value) || 30;
-      let width, height;
-      const r = resolution.value;
-      if(r !== 'default'){
-        const [w, h] = r.split('x').map(Number);
-        width = w; height = h;
-      }
-      const deviceId = cameraSelect.value || undefined;
-      const videoConstraints = {
-        frameRate: { ideal: fps, max: 60 },
-      };
-      if(width && height){ videoConstraints.width = { exact: width }; videoConstraints.height = { exact: height }; }
-      if(deviceId){ videoConstraints.deviceId = { exact: deviceId }; }
-      return { audio:false, video: videoConstraints };
+  function removeVideo(id){
+    const el = document.getElementById('vid-'+id);
+    if(el) el.remove();
+  }
+
+  async function startLocal(){
+    try{
+      localStream = await navigator.mediaDevices.getUserMedia({video:true, audio:false});
+      addVideo('local', localStream, 'Você (local)');
+      startLocalBtn.disabled = true; stopLocalBtn.disabled = false;
+      // notify server we have local stream available
+      send({type:'have-media'});
+    }catch(e){
+      alert('Erro ao acessar a câmera: '+e.message);
     }
+  }
 
-    async function listCameras(){
-      try{
-        const devices = await navigator.mediaDevices.enumerateDevices();
-        const cams = devices.filter(d => d.kind === 'videoinput');
-        cameraSelect.innerHTML = '';
-        cams.forEach((c, i)=>{
-          const opt = document.createElement('option');
-          opt.value = c.deviceId;
-          opt.textContent = c.label || `Câmera ${i+1}`;
-          cameraSelect.appendChild(opt);
-        });
-        if(cams.length === 0){
-          const opt = document.createElement('option');
-          opt.textContent = 'Nenhuma câmera encontrada';
-          cameraSelect.appendChild(opt);
-        }
-      }catch(e){
-        console.error(e);
-      }
+  function stopLocal(){
+    if(localStream){
+      localStream.getTracks().forEach(t=>t.stop());
+      localStream = null;
+      removeVideo('local');
+      startLocalBtn.disabled = false; stopLocalBtn.disabled = true;
+      send({type:'no-media'});
     }
+  }
 
-    async function startCamera(){
-      try{
-        stopCamera();
-        setStatus('Solicitando acesso à câmera…');
-        const constraints = buildConstraints();
-        stream = await navigator.mediaDevices.getUserMedia(constraints);
-        video.srcObject = stream;
-        await video.play();
-        startBtn.disabled = true;
-        stopBtn.disabled = false;
-        snapshotBtn.disabled = false;
-        fullscreenBtn.disabled = false;
-        badge.textContent = 'Ao vivo';
-        await listCameras();
-        setStatus('Câmera ativa. Dica: mude a resolução ou a câmera no topo.');
-      }catch(err){
-        console.error(err);
-        let msg = 'Erro ao acessar a webcam. ';
-        if(location.protocol !== 'https:' && location.hostname !== 'localhost'){
-          msg += 'Este recurso exige HTTPS (ou localhost).';
-        } else if(err.name === 'NotAllowedError'){
-          msg += 'Permissão negada. Verifique as permissões do site no cadeado da barra de endereço.';
-        } else if(err.name === 'NotFoundError'){
-          msg += 'Nenhuma câmera foi encontrada.';
-        } else if(err.name === 'OverconstrainedError'){
-          msg += 'A resolução escolhida não é suportada pela sua câmera.';
-        } else {
-          msg += err.message || String(err);
-        }
-        setStatus(msg, true);
-        badge.textContent = 'Câmera parada';
-        startBtn.disabled = false;
-        stopBtn.disabled = true;
-        snapshotBtn.disabled = true;
-        fullscreenBtn.disabled = true;
-      }
-    }
+  function connectWS(){
+    if(ws) ws.close();
+    ws = new WebSocket(SIGNALING_SERVER);
+    ws.onopen = ()=>{ log('Conectado ao sinalizador'); send({type:'join', room: roomInput.value}); };
+    ws.onmessage = async (ev)=>{ const msg = JSON.parse(ev.data); await handleSignal(msg); };
+    ws.onclose = ()=>{ log('Sinalizador desconectado'); };
+  }
 
-    function stopCamera(){
-      if(stream){
-        stream.getTracks().forEach(t => t.stop());
-        stream = null;
-      }
-      video.srcObject = null;
-      startBtn.disabled = false;
-      stopBtn.disabled = true;
-      snapshotBtn.disabled = true;
-      fullscreenBtn.disabled = true;
-      badge.textContent = 'Câmera parada';
-      setStatus('Câmera parada.');
-    }
+  function send(msg){
+    if(!ws || ws.readyState !== WebSocket.OPEN) return;
+    if(!msg.from) msg.from = clientId;
+    ws.send(JSON.stringify(msg));
+  }
 
-    function snapshot(){
-      if(!stream) return;
-      const track = stream.getVideoTracks()[0];
-      const settings = track.getSettings();
-      const w = settings.width || video.videoWidth || 1280;
-      const h = settings.height || video.videoHeight || 720;
-      canvas.width = w; canvas.height = h;
-
-      const ctx = canvas.getContext('2d');
-      // respeita espelhamento
-      const mirrored = mirrorToggle.value === 'on';
-      if(mirrored){
-        ctx.translate(w, 0);
-        ctx.scale(-1,1);
-      }
-      ctx.drawImage(video, 0, 0, w, h);
-      canvas.classList.remove('hidden');
-      canvas.style.maxWidth = '100%';
-      canvas.style.borderRadius = '12px';
-      downloadLink.href = canvas.toDataURL('image/png');
-    }
-
-    function clearPhoto(){
-      const ctx = canvas.getContext('2d');
-      ctx.clearRect(0,0,canvas.width,canvas.height);
-      canvas.classList.add('hidden');
-      downloadLink.removeAttribute('href');
-    }
-
-    function toggleMirror(){
-      const mirrored = mirrorToggle.value === 'on';
-      videoContainer.classList.toggle('mirrored', mirrored);
-    }
-
-    async function handleDeviceChange(){
-      await listCameras();
-    }
-
-    function toggleFullscreen(){
-      const el = videoContainer;
-      if(!document.fullscreenElement){
-        el.requestFullscreen?.();
-      }else{
-        document.exitFullscreen?.();
+  async function handleSignal(msg){
+    const {type, from, to, data, id} = msg;
+    if(type === 'id'){
+      clientId = msg.id; log('meu id', clientId);
+    }else if(type === 'new-peer'){
+      // criar PeerConnection e oferecer se queremos receber
+      if(from === clientId) return;
+      await createPeer(from, true);
+    }else if(type === 'offer' && to === clientId){
+      await createPeer(from, false);
+      const p = peers.get(from).pc;
+      await p.setRemoteDescription(new RTCSessionDescription(data));
+      const answer = await p.createAnswer();
+      await p.setLocalDescription(answer);
+      send({type:'answer', to:from, data: p.localDescription});
+    }else if(type === 'answer' && to === clientId){
+      const p = peers.get(from).pc;
+      await p.setRemoteDescription(new RTCSessionDescription(data));
+    }else if(type === 'ice' && to === clientId){
+      const p = peers.get(from).pc;
+      try{ await p.addIceCandidate(data); }catch(e){ console.warn(e); }
+    }else if(type === 'peer-left'){
+      // remove
+      if(peers.has(from)){
+        peers.get(from).pc.close(); peers.delete(from); removeVideo(from);
       }
     }
+  }
 
-    startBtn.addEventListener('click', startCamera);
-    stopBtn.addEventListener('click', stopCamera);
-    snapshotBtn.addEventListener('click', snapshot);
-    clearPhotoBtn.addEventListener('click', clearPhoto);
-    fullscreenBtn.addEventListener('click', toggleFullscreen);
-    cameraSelect.addEventListener('change', startCamera);
-    resolution.addEventListener('change', startCamera);
-    fpsInput.addEventListener('change', startCamera);
-    mirrorToggle.addEventListener('change', toggleMirror);
+  async function createPeer(peerId, isOfferer){
+    if(peers.has(peerId)) return;
+    const pc = new RTCPeerConnection({iceServers:[{urls:'stun:stun.l.google.com:19302'}]});
+    peers.set(peerId, {pc});
 
-    if('mediaDevices' in navigator){
-      navigator.mediaDevices.addEventListener?.('devicechange', handleDeviceChange);
-      listCameras();
-    }else{
-      setStatus('Seu navegador não suporta acesso à câmera via getUserMedia.', true);
+    pc.onicecandidate = (e)=>{ if(e.candidate) send({type:'ice', to:peerId, data: e.candidate}); };
+    pc.ontrack = (e)=>{ log('track from', peerId); const r = e.streams[0]; addVideo(peerId, r, 'Peer '+peerId); };
+
+    // if we have local media, add tracks (so others see us)
+    if(localStream){
+      for(const t of localStream.getTracks()) pc.addTrack(t, localStream);
     }
+
+    if(isOfferer){
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      send({type:'offer', to:peerId, data: pc.localDescription});
+    }
+
+    return pc;
+  }
+
+  // UI wiring
+  startLocalBtn.onclick = startLocal;
+  stopLocalBtn.onclick = stopLocal;
+  joinBtn.onclick = ()=>{ connectWS(); };
+
+  // connect on load (optional)
+  // connectWS();
   </script>
+
+  <!--
+  -- server.js (Node.js simples para sinalização via WebSocket)
+  -- Cole esse arquivo em um servidor (por exemplo, VPS ou Render) e rode: node server.js
+  -->
+  <pre style="background:#001218;color:#cfe;padding:10px;border-radius:8px;margin-top:18px;overflow:auto">
+  // server.js
+  const WebSocket = require('ws');
+  const wss = new WebSocket.Server({port:3000});
+  const rooms = new Map();
+
+  function send(ws, msg){ ws.send(JSON.stringify(msg)); }
+
+  wss.on('connection', (ws)=>{
+    ws.id = Math.random().toString(36).slice(2,9);
+    ws.room = null;
+    send(ws,{type:'id', id:ws.id});
+
+    ws.on('message', (raw)=>{
+      try{
+        const msg = JSON.parse(raw);
+        if(msg.type === 'join'){
+          const room = msg.room || 'default';
+          ws.room = room;
+          if(!rooms.has(room)) rooms.set(room, new Set());
+          const set = rooms.get(room);
+          // notify existing peers about new peer
+          set.forEach(peerWs=> send(peerWs,{type:'new-peer', from:ws.id}));
+          // add to room
+          set.add(ws);
+        }else if(msg.type === 'have-media' || msg.type === 'no-media'){
+          // broadcast to room if needed
+        }else{
+          // relay signaling messages (offer/answer/ice) to target
+          const roomSet = rooms.get(ws.room) || new Set();
+          roomSet.forEach(peerWs=>{
+            if(peerWs.id === msg.to) send(peerWs,msg);
+          });
+        }
+      }catch(e){ console.error(e); }
+    });
+
+    ws.on('close', ()=>{
+      const room = ws.room;
+      if(room && rooms.has(room)){
+        const set = rooms.get(room);
+        set.delete(ws);
+        // notify remaining peers
+        set.forEach(peerWs=> send(peerWs,{type:'peer-left', from:ws.id}));
+      }
+    });
+  });
+  </pre>
+
 </body>
 </html>
