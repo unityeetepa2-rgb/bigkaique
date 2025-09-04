@@ -1,213 +1,58 @@
-<script type="text/javascript">
-        var gk_isXlsx = false;
-        var gk_xlsxFileLookup = {};
-        var gk_fileData = {};
-        function filledCell(cell) {
-          return cell !== '' && cell != null;
-        }
-        function loadFileData(filename) {
-        if (gk_isXlsx && gk_xlsxFileLookup[filename]) {
-            try {
-                var workbook = XLSX.read(gk_fileData[filename], { type: 'base64' });
-                var firstSheetName = workbook.SheetNames[0];
-                var worksheet = workbook.Sheets[firstSheetName];
-
-                // Convert sheet to JSON to filter blank rows
-                var jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1, blankrows: false, defval: '' });
-                // Filter out blank rows (rows where all cells are empty, null, or undefined)
-                var filteredData = jsonData.filter(row => row.some(filledCell));
-
-                // Heuristic to find the header row by ignoring rows with fewer filled cells than the next row
-                var headerRowIndex = filteredData.findIndex((row, index) =>
-                  row.filter(filledCell).length >= filteredData[index + 1]?.filter(filledCell).length
-                );
-                // Fallback
-                if (headerRowIndex === -1 || headerRowIndex > 25) {
-                  headerRowIndex = 0;
-                }
-
-                // Convert filtered JSON back to CSV
-                var csv = XLSX.utils.aoa_to_sheet(filteredData.slice(headerRowIndex)); // Create a new sheet from filtered array of arrays
-                csv = XLSX.utils.sheet_to_csv(csv, { header: 1 });
-                return csv;
-            } catch (e) {
-                console.error(e);
-                return "";
-            }
-        }
-        return gk_fileData[filename] || "";
-        }
-        </script><!DOCTYPE html>
-<html lang="en">
+<!DOCTYPE html>
+<html lang="pt-BR">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Video Conferência</title>
-    <style>
-        body {
-            font-family: Arial, sans-serif;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            background-color: #f0f0f0;
-            margin: 0;
-            padding: 20px;
-        }
-        h1 {
-            color: #333;
-        }
-        #roomInput, #joinButton {
-            padding: 10px;
-            margin: 10px;
-            font-size: 16px;
-        }
-        #videoGrid {
-            display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
-            gap: 10px;
-            width: 100%;
-            max-width: 1200px;
-        }
-        video {
-            width: 100%;
-            border: 2px solid #333;
-            border-radius: 8px;
-            background-color: #000;
-        }
-        #controls {
-            margin-top: 10px;
-        }
-        button {
-            padding: 8px 16px;
-            margin: 0 5px;
-            cursor: pointer;
-            background-color: #4CAF50;
-            color: white;
-            border: none;
-            border-radius: 4px;
-        }
-        button:hover {
-            background-color: #45a049;
-        }
-    </style>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>BigKaique — Videoconferência</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 0; padding: 0; background: #111; color: #fff; }
+    header { padding: 10px 20px; background: #222; display: flex; justify-content: space-between; align-items: center; }
+    h1 { margin: 0; font-size: 1.5em; }
+    main { padding: 20px; display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 10px; }
+    video { width: 100%; height: 200px; object-fit: cover; border-radius: 10px; background: #000; }
+    .controls { display: flex; justify-content: center; gap: 10px; margin: 20px 0; }
+    button { padding: 10px 20px; border: none; border-radius: 5px; cursor: pointer; background: #28a745; color: #fff; font-size: 1em; }
+    button:disabled { background: #555; cursor: not-allowed; }
+  </style>
 </head>
 <body>
-    <h1>Video Conferência</h1>
-    <input id="roomInput" type="text" placeholder="Digite o nome da sala">
-    <button id="joinButton">Entrar na Sala</button>
-    <div id="videoGrid"></div>
-    <div id="controls">
-        <button id="muteButton">Desativar Microfone</button>
-        <button id="videoButton">Desativar Vídeo</button>
-    </div>
+  <header>
+    <h1>BigKaique — Videoconferência</h1>
+  </header>
+  <div class="controls">
+    <button id="startBtn">Iniciar Câmera</button>
+    <button id="stopBtn" disabled>Parar Câmera</button>
+  </div>
+  <main id="videoGrid"></main>
+  <script>
+    const startBtn = document.getElementById('startBtn');
+    const stopBtn = document.getElementById('stopBtn');
+    const videoGrid = document.getElementById('videoGrid');
+    let localStream = null;
 
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.5.1/socket.io.min.js"></script>
-    <script src="https://webrtc.github.io/adapter/adapter-latest.js"></script>
-    <script>
-        const socket = io('http://localhost:3000'); // Substitua pelo URL do seu servidor
-        const videoGrid = document.getElementById('videoGrid');
-        const roomInput = document.getElementById('roomInput');
-        const joinButton = document.getElementById('joinButton');
-        const muteButton = document.getElementById('muteButton');
-        const videoButton = document.getElementById('videoButton');
+    startBtn.addEventListener('click', async () => {
+      try {
+        localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+        const video = document.createElement('video');
+        video.srcObject = localStream;
+        video.autoplay = true;
+        video.muted = true;
+        videoGrid.appendChild(video);
+        startBtn.disabled = true;
+        stopBtn.disabled = false;
+      } catch (err) {
+        alert('Erro ao acessar a câmera e microfone: ' + err);
+      }
+    });
 
-        const myPeer = new RTCPeerConnection({
-            iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
-        });
-        let myStream;
-        let roomId;
-        let isMuted = false;
-        let isVideoOn = true;
-
-        // Solicitar acesso à câmera e microfone
-        async function startVideo() {
-            try {
-                myStream = await navigator.mediaDevices.getUserMedia({
-                    video: true,
-                    audio: true
-                });
-                const myVideo = document.createElement('video');
-                myVideo.muted = true;
-                myVideo.srcObject = myStream;
-                myVideo.addEventListener('loadedmetadata', () => {
-                    myVideo.play();
-                });
-                videoGrid.appendChild(myVideo);
-
-                myStream.getTracks().forEach(track => {
-                    myPeer.addTrack(track, myStream);
-                });
-            } catch (err) {
-                console.error('Erro ao acessar mídia:', err);
-            }
-        }
-
-        // Entrar na sala
-        joinButton.addEventListener('click', () => {
-            roomId = roomInput.value.trim();
-            if (roomId) {
-                socket.emit('join-room', roomId);
-                startVideo();
-            } else {
-                alert('Por favor, insira um nome de sala.');
-            }
-        });
-
-        // Receber stream de outros usuários
-        myPeer.ontrack = (event) => {
-            const [remoteStream] = event.streams;
-            const remoteVideo = document.createElement('video');
-            remoteVideo.srcObject = remoteStream;
-            remoteVideo.addEventListener('loadedmetadata', () => {
-                remoteVideo.play();
-            });
-            videoGrid.appendChild(remoteVideo);
-        };
-
-        // Configurar sinalização
-        myPeer.onicecandidate = (event) => {
-            if (event.candidate) {
-                socket.emit('ice-candidate', event.candidate, roomId);
-            }
-        };
-
-        socket.on('user-connected', async (userId) => {
-            const offer = await myPeer.createOffer();
-            await myPeer.setLocalDescription(offer);
-            socket.emit('offer', offer, roomId, userId);
-        });
-
-        socket.on('offer', async (offer, fromUserId) => {
-            await myPeer.setRemoteDescription(new RTCSessionDescription(offer));
-            const answer = await myPeer.createAnswer();
-            await myPeer.setLocalDescription(answer);
-            socket.emit('answer', answer, roomId, fromUserId);
-        });
-
-        socket.on('answer', (answer) => {
-            myPeer.setRemoteDescription(new RTCSessionDescription(answer));
-        });
-
-        socket.on('ice-candidate', (candidate) => {
-            myPeer.addIceCandidate(new RTCIceCandidate(candidate));
-        });
-
-        // Controles de microfone e vídeo
-        muteButton.addEventListener('click', () => {
-            isMuted = !isMuted;
-            myStream.getAudioTracks().forEach(track => {
-                track.enabled = !isMuted;
-            });
-            muteButton.textContent = isMuted ? 'Ativar Microfone' : 'Desativar Microfone';
-        });
-
-        videoButton.addEventListener('click', () => {
-            isVideoOn = !isVideoOn;
-            myStream.getVideoTracks().forEach(track => {
-                track.enabled = isVideoOn;
-            });
-            videoButton.textContent = isVideoOn ? 'Desativar Vídeo' : 'Ativar Vídeo';
-        });
-    </script>
+    stopBtn.addEventListener('click', () => {
+      if (localStream) {
+        localStream.getTracks().forEach(track => track.stop());
+        videoGrid.innerHTML = '';
+        startBtn.disabled = false;
+        stopBtn.disabled = true;
+      }
+    });
+  </script>
 </body>
 </html>
