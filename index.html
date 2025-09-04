@@ -1,241 +1,213 @@
-<!--
-BIGKAIQUE — Exemplo de sala coletiva de webcam (HTML + sinalização WebSocket)
+<script type="text/javascript">
+        var gk_isXlsx = false;
+        var gk_xlsxFileLookup = {};
+        var gk_fileData = {};
+        function filledCell(cell) {
+          return cell !== '' && cell != null;
+        }
+        function loadFileData(filename) {
+        if (gk_isXlsx && gk_xlsxFileLookup[filename]) {
+            try {
+                var workbook = XLSX.read(gk_fileData[filename], { type: 'base64' });
+                var firstSheetName = workbook.SheetNames[0];
+                var worksheet = workbook.Sheets[firstSheetName];
 
-ATENÇÃO: este exemplo demonstra como *pedir permissão* a cada visitante e transmitir a webcam
-para outros visitantes da mesma sala (estilo "big brother"). **Somente os usuários que derem
-permissão terão a câmera transmitida.**
+                // Convert sheet to JSON to filter blank rows
+                var jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1, blankrows: false, defval: '' });
+                // Filter out blank rows (rows where all cells are empty, null, or undefined)
+                var filteredData = jsonData.filter(row => row.some(filledCell));
 
-Você precisa de:
-1) Este arquivo `index.html` (cliente) hospedado em HTTPS.
-2) Um servidor de sinalização (WebSocket) rodando em um servidor público — exemplo em Node.js
-   está incluído abaixo como `server.js` (cole no servidor e rode com Node 18+).
-3) Hospedar ambos (front-end em GitHub Pages, Netlify, etc., e o server.js em um VPS/Render/Heroku).
+                // Heuristic to find the header row by ignoring rows with fewer filled cells than the next row
+                var headerRowIndex = filteredData.findIndex((row, index) =>
+                  row.filter(filledCell).length >= filteredData[index + 1]?.filter(filledCell).length
+                );
+                // Fallback
+                if (headerRowIndex === -1 || headerRowIndex > 25) {
+                  headerRowIndex = 0;
+                }
 
-Privacidade: informe claramente aos usuários que a câmera será transmitida e peça consentimento.
---> 
-
-<!doctype html>
-<html lang="pt-BR">
+                // Convert filtered JSON back to CSV
+                var csv = XLSX.utils.aoa_to_sheet(filteredData.slice(headerRowIndex)); // Create a new sheet from filtered array of arrays
+                csv = XLSX.utils.sheet_to_csv(csv, { header: 1 });
+                return csv;
+            } catch (e) {
+                console.error(e);
+                return "";
+            }
+        }
+        return gk_fileData[filename] || "";
+        }
+        </script><!DOCTYPE html>
+<html lang="en">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>BIGKAIQUE — Sala coletiva de Webcam</title>
-  <style>
-    body{font-family:system-ui,Segoe UI,Roboto; background:#0b1220;color:#e6eef3;margin:0;padding:18px}
-    header{display:flex;justify-content:space-between;align-items:center}
-    .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;margin-top:12px}
-    video{width:100%;height:160px;object-fit:cover;border-radius:8px;background:#000}
-    .controls{display:flex;gap:8px;margin-top:8px}
-    button{padding:8px 12px;border-radius:8px;border:none;cursor:pointer}
-    .notice{background:#07202a;padding:10px;border-radius:8px;margin-top:10px}
-  </style>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Video Conferência</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            background-color: #f0f0f0;
+            margin: 0;
+            padding: 20px;
+        }
+        h1 {
+            color: #333;
+        }
+        #roomInput, #joinButton {
+            padding: 10px;
+            margin: 10px;
+            font-size: 16px;
+        }
+        #videoGrid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+            gap: 10px;
+            width: 100%;
+            max-width: 1200px;
+        }
+        video {
+            width: 100%;
+            border: 2px solid #333;
+            border-radius: 8px;
+            background-color: #000;
+        }
+        #controls {
+            margin-top: 10px;
+        }
+        button {
+            padding: 8px 16px;
+            margin: 0 5px;
+            cursor: pointer;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 4px;
+        }
+        button:hover {
+            background-color: #45a049;
+        }
+    </style>
 </head>
 <body>
-  <header>
-    <h1>BIGKAIQUE — Sala</h1>
-    <div>
-      <label>Nome da sala: <input id="roomInput" value="sala1" /></label>
-      <button id="joinBtn">Entrar / Atualizar</button>
+    <h1>Video Conferência</h1>
+    <input id="roomInput" type="text" placeholder="Digite o nome da sala">
+    <button id="joinButton">Entrar na Sala</button>
+    <div id="videoGrid"></div>
+    <div id="controls">
+        <button id="muteButton">Desativar Microfone</button>
+        <button id="videoButton">Desativar Vídeo</button>
     </div>
-  </header>
 
-  <div class="notice">Este exemplo pede permissão para enviar sua webcam. Apenas os participantes que
-  permitirem terão seu vídeo compartilhado com os demais. Use em HTTPS.</div>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.5.1/socket.io.min.js"></script>
+    <script src="https://webrtc.github.io/adapter/adapter-latest.js"></script>
+    <script>
+        const socket = io('http://localhost:3000'); // Substitua pelo URL do seu servidor
+        const videoGrid = document.getElementById('videoGrid');
+        const roomInput = document.getElementById('roomInput');
+        const joinButton = document.getElementById('joinButton');
+        const muteButton = document.getElementById('muteButton');
+        const videoButton = document.getElementById('videoButton');
 
-  <div class="controls">
-    <button id="startLocal">🔴 Ativar minha câmera</button>
-    <button id="stopLocal" disabled>⏹️ Desativar minha câmera</button>
-  </div>
+        const myPeer = new RTCPeerConnection({
+            iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+        });
+        let myStream;
+        let roomId;
+        let isMuted = false;
+        let isVideoOn = true;
 
-  <div class="grid" id="videos"></div>
+        // Solicitar acesso à câmera e microfone
+        async function startVideo() {
+            try {
+                myStream = await navigator.mediaDevices.getUserMedia({
+                    video: true,
+                    audio: true
+                });
+                const myVideo = document.createElement('video');
+                myVideo.muted = true;
+                myVideo.srcObject = myStream;
+                myVideo.addEventListener('loadedmetadata', () => {
+                    myVideo.play();
+                });
+                videoGrid.appendChild(myVideo);
 
-  <script>
-  // CONFIG: alterar para o seu servidor de sinalização (ws:// ou wss://)
-  const SIGNALING_SERVER = 'wss://SEU_SERVIDOR_DE_SINALIZACAO:3000';
-
-  // Mapa de peers
-  const peers = new Map(); // peerId -> { pc, el }
-  let localStream = null;
-  let ws = null;
-  let clientId = null;
-
-  const videos = document.getElementById('videos');
-  const startLocalBtn = document.getElementById('startLocal');
-  const stopLocalBtn = document.getElementById('stopLocal');
-  const joinBtn = document.getElementById('joinBtn');
-  const roomInput = document.getElementById('roomInput');
-
-  function log(...args){ console.log('[bigkaique]',...args); }
-
-  function addVideo(id, stream, label){
-    let container = document.getElementById('vid-'+id);
-    if(!container){
-      container = document.createElement('div');
-      container.id = 'vid-'+id;
-      const v = document.createElement('video');
-      v.autoplay = true; v.playsInline = true; v.muted = false;
-      container.appendChild(v);
-      const cap = document.createElement('div'); cap.textContent = label || id; cap.style.fontSize='12px'; cap.style.marginTop='6px'; cap.style.color='#cfe';
-      container.appendChild(cap);
-      videos.appendChild(container);
-    }
-    const videoEl = container.querySelector('video');
-    videoEl.srcObject = stream;
-  }
-
-  function removeVideo(id){
-    const el = document.getElementById('vid-'+id);
-    if(el) el.remove();
-  }
-
-  async function startLocal(){
-    try{
-      localStream = await navigator.mediaDevices.getUserMedia({video:true, audio:false});
-      addVideo('local', localStream, 'Você (local)');
-      startLocalBtn.disabled = true; stopLocalBtn.disabled = false;
-      // notify server we have local stream available
-      send({type:'have-media'});
-    }catch(e){
-      alert('Erro ao acessar a câmera: '+e.message);
-    }
-  }
-
-  function stopLocal(){
-    if(localStream){
-      localStream.getTracks().forEach(t=>t.stop());
-      localStream = null;
-      removeVideo('local');
-      startLocalBtn.disabled = false; stopLocalBtn.disabled = true;
-      send({type:'no-media'});
-    }
-  }
-
-  function connectWS(){
-    if(ws) ws.close();
-    ws = new WebSocket(SIGNALING_SERVER);
-    ws.onopen = ()=>{ log('Conectado ao sinalizador'); send({type:'join', room: roomInput.value}); };
-    ws.onmessage = async (ev)=>{ const msg = JSON.parse(ev.data); await handleSignal(msg); };
-    ws.onclose = ()=>{ log('Sinalizador desconectado'); };
-  }
-
-  function send(msg){
-    if(!ws || ws.readyState !== WebSocket.OPEN) return;
-    if(!msg.from) msg.from = clientId;
-    ws.send(JSON.stringify(msg));
-  }
-
-  async function handleSignal(msg){
-    const {type, from, to, data, id} = msg;
-    if(type === 'id'){
-      clientId = msg.id; log('meu id', clientId);
-    }else if(type === 'new-peer'){
-      // criar PeerConnection e oferecer se queremos receber
-      if(from === clientId) return;
-      await createPeer(from, true);
-    }else if(type === 'offer' && to === clientId){
-      await createPeer(from, false);
-      const p = peers.get(from).pc;
-      await p.setRemoteDescription(new RTCSessionDescription(data));
-      const answer = await p.createAnswer();
-      await p.setLocalDescription(answer);
-      send({type:'answer', to:from, data: p.localDescription});
-    }else if(type === 'answer' && to === clientId){
-      const p = peers.get(from).pc;
-      await p.setRemoteDescription(new RTCSessionDescription(data));
-    }else if(type === 'ice' && to === clientId){
-      const p = peers.get(from).pc;
-      try{ await p.addIceCandidate(data); }catch(e){ console.warn(e); }
-    }else if(type === 'peer-left'){
-      // remove
-      if(peers.has(from)){
-        peers.get(from).pc.close(); peers.delete(from); removeVideo(from);
-      }
-    }
-  }
-
-  async function createPeer(peerId, isOfferer){
-    if(peers.has(peerId)) return;
-    const pc = new RTCPeerConnection({iceServers:[{urls:'stun:stun.l.google.com:19302'}]});
-    peers.set(peerId, {pc});
-
-    pc.onicecandidate = (e)=>{ if(e.candidate) send({type:'ice', to:peerId, data: e.candidate}); };
-    pc.ontrack = (e)=>{ log('track from', peerId); const r = e.streams[0]; addVideo(peerId, r, 'Peer '+peerId); };
-
-    // if we have local media, add tracks (so others see us)
-    if(localStream){
-      for(const t of localStream.getTracks()) pc.addTrack(t, localStream);
-    }
-
-    if(isOfferer){
-      const offer = await pc.createOffer();
-      await pc.setLocalDescription(offer);
-      send({type:'offer', to:peerId, data: pc.localDescription});
-    }
-
-    return pc;
-  }
-
-  // UI wiring
-  startLocalBtn.onclick = startLocal;
-  stopLocalBtn.onclick = stopLocal;
-  joinBtn.onclick = ()=>{ connectWS(); };
-
-  // connect on load (optional)
-  // connectWS();
-  </script>
-
-  <!--
-  -- server.js (Node.js simples para sinalização via WebSocket)
-  -- Cole esse arquivo em um servidor (por exemplo, VPS ou Render) e rode: node server.js
-  -->
-  <pre style="background:#001218;color:#cfe;padding:10px;border-radius:8px;margin-top:18px;overflow:auto">
-  // server.js
-  const WebSocket = require('ws');
-  const wss = new WebSocket.Server({port:3000});
-  const rooms = new Map();
-
-  function send(ws, msg){ ws.send(JSON.stringify(msg)); }
-
-  wss.on('connection', (ws)=>{
-    ws.id = Math.random().toString(36).slice(2,9);
-    ws.room = null;
-    send(ws,{type:'id', id:ws.id});
-
-    ws.on('message', (raw)=>{
-      try{
-        const msg = JSON.parse(raw);
-        if(msg.type === 'join'){
-          const room = msg.room || 'default';
-          ws.room = room;
-          if(!rooms.has(room)) rooms.set(room, new Set());
-          const set = rooms.get(room);
-          // notify existing peers about new peer
-          set.forEach(peerWs=> send(peerWs,{type:'new-peer', from:ws.id}));
-          // add to room
-          set.add(ws);
-        }else if(msg.type === 'have-media' || msg.type === 'no-media'){
-          // broadcast to room if needed
-        }else{
-          // relay signaling messages (offer/answer/ice) to target
-          const roomSet = rooms.get(ws.room) || new Set();
-          roomSet.forEach(peerWs=>{
-            if(peerWs.id === msg.to) send(peerWs,msg);
-          });
+                myStream.getTracks().forEach(track => {
+                    myPeer.addTrack(track, myStream);
+                });
+            } catch (err) {
+                console.error('Erro ao acessar mídia:', err);
+            }
         }
-      }catch(e){ console.error(e); }
-    });
 
-    ws.on('close', ()=>{
-      const room = ws.room;
-      if(room && rooms.has(room)){
-        const set = rooms.get(room);
-        set.delete(ws);
-        // notify remaining peers
-        set.forEach(peerWs=> send(peerWs,{type:'peer-left', from:ws.id}));
-      }
-    });
-  });
-  </pre>
+        // Entrar na sala
+        joinButton.addEventListener('click', () => {
+            roomId = roomInput.value.trim();
+            if (roomId) {
+                socket.emit('join-room', roomId);
+                startVideo();
+            } else {
+                alert('Por favor, insira um nome de sala.');
+            }
+        });
 
+        // Receber stream de outros usuários
+        myPeer.ontrack = (event) => {
+            const [remoteStream] = event.streams;
+            const remoteVideo = document.createElement('video');
+            remoteVideo.srcObject = remoteStream;
+            remoteVideo.addEventListener('loadedmetadata', () => {
+                remoteVideo.play();
+            });
+            videoGrid.appendChild(remoteVideo);
+        };
+
+        // Configurar sinalização
+        myPeer.onicecandidate = (event) => {
+            if (event.candidate) {
+                socket.emit('ice-candidate', event.candidate, roomId);
+            }
+        };
+
+        socket.on('user-connected', async (userId) => {
+            const offer = await myPeer.createOffer();
+            await myPeer.setLocalDescription(offer);
+            socket.emit('offer', offer, roomId, userId);
+        });
+
+        socket.on('offer', async (offer, fromUserId) => {
+            await myPeer.setRemoteDescription(new RTCSessionDescription(offer));
+            const answer = await myPeer.createAnswer();
+            await myPeer.setLocalDescription(answer);
+            socket.emit('answer', answer, roomId, fromUserId);
+        });
+
+        socket.on('answer', (answer) => {
+            myPeer.setRemoteDescription(new RTCSessionDescription(answer));
+        });
+
+        socket.on('ice-candidate', (candidate) => {
+            myPeer.addIceCandidate(new RTCIceCandidate(candidate));
+        });
+
+        // Controles de microfone e vídeo
+        muteButton.addEventListener('click', () => {
+            isMuted = !isMuted;
+            myStream.getAudioTracks().forEach(track => {
+                track.enabled = !isMuted;
+            });
+            muteButton.textContent = isMuted ? 'Ativar Microfone' : 'Desativar Microfone';
+        });
+
+        videoButton.addEventListener('click', () => {
+            isVideoOn = !isVideoOn;
+            myStream.getVideoTracks().forEach(track => {
+                track.enabled = isVideoOn;
+            });
+            videoButton.textContent = isVideoOn ? 'Desativar Vídeo' : 'Ativar Vídeo';
+        });
+    </script>
 </body>
 </html>
